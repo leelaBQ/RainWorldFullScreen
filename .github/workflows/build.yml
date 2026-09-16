@@ -6,6 +6,7 @@ on:
     paths:
       - "StayVisible.cs"
       - "StayVisible.csproj"
+      - "NuGet.Config"
       - "assets/**"
       - ".github/workflows/build.yml"
 
