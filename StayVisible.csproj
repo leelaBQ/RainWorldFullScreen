@@ -1,0 +1,42 @@
+<Project>
+  <Import Project="Sdk.props" Sdk="Microsoft.NET.Sdk" />
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <IsPublishable>false</IsPublishable>
+    <AssemblyName>StayVisible</AssemblyName>
+    <RootNamespace>StayVisible</RootNamespace>
+    <ModBuildFolder>mod/stayvisible</ModBuildFolder>
+  </PropertyGroup>
+
+  <!-- Deliberately NO Rain World Assembly-CSharp references. -->
+  <ItemGroup>
+    <PackageReference Include="BepInEx.Core" Version="5.4.17" />
+    <PackageReference Include="UnityEngine.Modules" Version="2020.3.38" IncludeAssets="compile" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ModAssetFiles Include="assets/**/*" />
+    <ModPluginFiles Include="$(TargetPath)" />
+  </ItemGroup>
+
+  <Target Name="BuildModFolder"
+      Inputs="@(ModAssetFiles);@(ModPluginFiles)"
+      Outputs="@(ModAssetFiles->'$(OutDir)$(ModBuildFolder)/%(RecursiveDir)%(Filename)%(Extension)');@(ModPluginFiles->'$(OutDir)$(ModBuildFolder)/plugins/%(Filename)%(Extension)')">
+    <Copy SourceFiles="@(ModAssetFiles)" DestinationFolder="$(OutDir)$(ModBuildFolder)/%(RecursiveDir)" />
+    <Copy SourceFiles="@(ModPluginFiles)" DestinationFolder="$(OutDir)$(ModBuildFolder)/plugins" />
+    <ItemGroup>
+      <FileWrites Include="@(ModAssetFiles->'$(OutDir)$(ModBuildFolder)/%(RecursiveDir)%(Filename)%(Extension)');@(ModPluginFiles->'$(OutDir)$(ModBuildFolder)/plugins/%(Filename)%(Extension)')" />
+    </ItemGroup>
+  </Target>
+
+  <Import Project="Sdk.targets" Sdk="Microsoft.NET.Sdk" />
+
+  <PropertyGroup>
+    <IncrementalCleanDependsOn>
+      BuildModFolder;
+      $(IncrementalCleanDependsOn)
+    </IncrementalCleanDependsOn>
+  </PropertyGroup>
+</Project>
