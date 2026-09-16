@@ -17,7 +17,7 @@ namespace StayVisible
     {
         public const string PLUGIN_GUID = "local.rainworld.stayvisible";
         public const string PLUGIN_NAME = "Stay Visible";
-        public const string PLUGIN_VERSION = "1.0.0";
+        public const string PLUGIN_VERSION = "1.1.0";
 
         private const int GWL_STYLE = -16;
         private const int GWL_EXSTYLE = -20;
@@ -40,6 +40,9 @@ namespace StayVisible
         private const uint SWP_FRAMECHANGED = 0x0020;
         private const uint SWP_SHOWWINDOW = 0x0040;
 
+        private bool initialized;
+        private MONITORINFO targetMonitor;
+
         private void Awake()
         {
             Application.runInBackground = true;
@@ -53,28 +56,31 @@ namespace StayVisible
                 yield break;
             }
 
+            // Rain World's BepInEx chainloader can start before Process.MainWindowHandle
+            // becomes usable. Find the real top-level window by PID instead and wait only
+            // during startup. There is no permanent polling loop.
             IntPtr hwnd = IntPtr.Zero;
-            for (int i = 0; i < 30 && hwnd == IntPtr.Zero; i++)
+            for (int frame = 0; frame < 600 && hwnd == IntPtr.Zero; frame++)
             {
-                using (Process process = Process.GetCurrentProcess())
-                    hwnd = process.MainWindowHandle;
-
+                hwnd = FindLargestVisibleWindowForCurrentProcess();
                 if (hwnd == IntPtr.Zero)
                     yield return null;
             }
 
             if (hwnd == IntPtr.Zero)
             {
-                Logger.LogError("Stay Visible could not obtain Rain World's window handle.");
+                Logger.LogError("Stay Visible could not find Rain World's top-level window after 600 frames.");
                 yield break;
             }
 
-            MONITORINFO monitor = GetMonitor(hwnd);
-            int width = monitor.rcMonitor.Right - monitor.rcMonitor.Left;
-            int height = monitor.rcMonitor.Bottom - monitor.rcMonitor.Top;
+            targetMonitor = GetMonitor(hwnd);
+            int width = targetMonitor.rcMonitor.Right - targetMonitor.rcMonitor.Left;
+            int height = targetMonitor.rcMonitor.Bottom - targetMonitor.rcMonitor.Top;
 
-            // Community-proven strategy used by BepInEx.GraphicsSettings:
-            // keep Unity genuinely windowed, then remove the native Windows frame.
+            Logger.LogInfo($"Stay Visible found Rain World window 0x{hwnd.ToInt64():X}; target monitor={width}x{height} at ({targetMonitor.rcMonitor.Left},{targetMonitor.rcMonitor.Top}).");
+
+            // Keep Unity genuinely windowed. Windows then sees a normal window instead
+            // of a fullscreen surface that is allowed to disappear when focus changes.
             if (Screen.fullScreen)
             {
                 Screen.SetResolution(width, height, false);
@@ -82,17 +88,79 @@ namespace StayVisible
                 yield return null;
             }
 
-            // Unity may recreate/rebind the native window after changing display mode.
-            using (Process process = Process.GetCurrentProcess())
-            {
-                if (process.MainWindowHandle != IntPtr.Zero)
-                    hwnd = process.MainWindowHandle;
-            }
+            // Unity can recreate/rebind its native window after a display-mode change.
+            IntPtr refreshed = FindLargestVisibleWindowForCurrentProcess();
+            if (refreshed != IntPtr.Zero)
+                hwnd = refreshed;
 
-            MakeBorderless(hwnd, monitor);
+            MakeBorderless(hwnd, targetMonitor);
             Application.runInBackground = true;
+            initialized = true;
 
             Logger.LogInfo($"Stay Visible applied: borderless {width}x{height}; runInBackground=true.");
+        }
+
+        private void OnApplicationFocus(bool hasFocus)
+        {
+            Application.runInBackground = true;
+
+            if (initialized)
+                StartCoroutine(ReassertBorderlessNextFrame());
+        }
+
+        private IEnumerator ReassertBorderlessNextFrame()
+        {
+            // Event-driven only: one short reassertion when focus changes, never every frame.
+            yield return null;
+
+            int width = targetMonitor.rcMonitor.Right - targetMonitor.rcMonitor.Left;
+            int height = targetMonitor.rcMonitor.Bottom - targetMonitor.rcMonitor.Top;
+
+            if (Screen.fullScreen)
+            {
+                Screen.SetResolution(width, height, false);
+                yield return null;
+            }
+
+            IntPtr hwnd = FindLargestVisibleWindowForCurrentProcess();
+            if (hwnd != IntPtr.Zero)
+                MakeBorderless(hwnd, targetMonitor);
+        }
+
+        private static IntPtr FindLargestVisibleWindowForCurrentProcess()
+        {
+            uint currentPid = unchecked((uint)Process.GetCurrentProcess().Id);
+            IntPtr bestWindow = IntPtr.Zero;
+            long bestArea = 0;
+
+            EnumWindows((hwnd, lParam) =>
+            {
+                if (!IsWindowVisible(hwnd))
+                    return true;
+
+                uint pid;
+                GetWindowThreadProcessId(hwnd, out pid);
+                if (pid != currentPid)
+                    return true;
+
+                RECT rect;
+                if (!GetWindowRect(hwnd, out rect))
+                    return true;
+
+                long width = Math.Max(0, rect.Right - rect.Left);
+                long height = Math.Max(0, rect.Bottom - rect.Top);
+                long area = width * height;
+
+                if (area > bestArea)
+                {
+                    bestArea = area;
+                    bestWindow = hwnd;
+                }
+
+                return true;
+            }, IntPtr.Zero);
+
+            return bestWindow;
         }
 
         private static MONITORINFO GetMonitor(IntPtr hwnd)
@@ -146,6 +214,8 @@ namespace StayVisible
                 throw new InvalidOperationException("SetWindowPos failed.");
         }
 
+        private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+
         [StructLayout(LayoutKind.Sequential)]
         private struct RECT
         {
@@ -163,6 +233,18 @@ namespace StayVisible
             public RECT rcWork;
             public uint dwFlags;
         }
+
+        [DllImport("user32.dll")]
+        private static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+
+        [DllImport("user32.dll")]
+        private static extern bool IsWindowVisible(IntPtr hWnd);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
 
         [DllImport("user32.dll", SetLastError = true)]
         private static extern int GetWindowLong(IntPtr hWnd, int nIndex);
